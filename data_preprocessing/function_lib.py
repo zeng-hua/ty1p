@@ -293,4 +293,4 @@ class Patient:
 P = Patient(12)
 P.getPeriodPatientData()
 P.getCarbInsulinTable()
-self.CarbInsulinTable.to_csv('out.csv')
+# CarbInsulinTable.to_csv('out.csv')
