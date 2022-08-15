@@ -26,7 +26,7 @@ def filter(s):
 
 
 def aes_encrypt(string):
-    key = 'DtwuAfLOzUB5vOFZxNcDUAts7hNJ1bH4RbjsIdtS6S8='
+    key = ''
     aes = AES.new(base64.b64decode(key), AES.MODE_ECB)
     bytes_str = string.encode('utf-8')
     pad_bytes_str = pad(bytes_str, block_size=16)
@@ -48,7 +48,7 @@ def getPatientDataFromInterface(user_id, start_date, end_date, url_id):
                   "/cgmdc-data-api-service/api/patientDataApi/drugActionList"]  # insulin 接口
     url = "https://cgmdc-api.si-datacenter.com" + url_suffix[url_id]
 
-    head = {'akid': '1d8d659dcad140aba7d329158f1cb756',
+    head = {'akid': '',
             'mid': aes_encrypt(str(uuid.uuid1())),
             'ts': aes_encrypt(time.strftime("%Y%m%d%H%M%S"))}
 
@@ -73,7 +73,7 @@ def getPatientListFromInterface(pageIndex, pageSize):
                   "/cgmdc-data-api-service/api/patientDataApi/patientDataList"]
     url = "https://cgmdc-api.si-datacenter.com" + url_suffix[0]
 
-    head = {'akid': '1d8d659dcad140aba7d329158f1cb756',
+    head = {'akid': '',
             'mid': aes_encrypt(str(uuid.uuid1())),
             'ts': aes_encrypt(time.strftime("%Y%m%d%H%M%S"))}
 
@@ -99,7 +99,7 @@ def getPumpBasalFromInterface(user_id):
     url_suffix = "/cgmdc-data-api-service/api/medicationSchemeApi/basicSchemeList"
     url = "https://cgmdc-api.si-datacenter.com" + url_suffix
 
-    head = {'akid': '1d8d659dcad140aba7d329158f1cb756',
+    head = {'akid': '',
             'mid': aes_encrypt(str(uuid.uuid1())),
             'ts': aes_encrypt(time.strftime("%Y%m%d%H%M%S"))}
 
@@ -121,7 +121,7 @@ def getCGMPeriodFromInterface(user_id):
     url_suffix = "/cgmdc-data-api-service/api/deviceDataApi/patientInfoPage"
     url = "https://cgmdc-api.si-datacenter.com" + url_suffix
 
-    head = {'akid': '1d8d659dcad140aba7d329158f1cb756',
+    head = {'akid': '',
             'mid': aes_encrypt(str(uuid.uuid1())),
             'ts': aes_encrypt(time.strftime("%Y%m%d%H%M%S"))}
 
