@@ -4,15 +4,25 @@ import time
 import uuid
 from operator import itemgetter
 from pathlib import Path
-import statsmodels.api as sm
+
+import numpy as np
 import pandas as pd
 import requests
+import statsmodels.api as sm
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-
-
 # 调用解码
 from matplotlib import pyplot as plt
+from vmdpy import VMD
+
+
+def filter(s):
+    alpha, tau, K, DC, init, tol = 2000.0, 0, 5, 0, 1, 1e-7
+    (u, u_hat, omega) = VMD(s, alpha, tau, K, DC, init, tol)
+    y = u[0] + u[1] + u[2]
+    if len(y) != len(s):
+        y = np.insert(y, 0, y[0:len(s) - len(y)])
+    return y
 
 
 def aes_encrypt(string):
@@ -101,6 +111,31 @@ def getPumpBasalFromInterface(user_id):
     return res
 
 
+# 获取请求-CGM佩戴周期数据
+def getCGMPeriodFromInterface(user_id):
+    """
+    Arguments :
+        pageIndex : int.
+        pageSize : int.
+    """
+    url_suffix = "/cgmdc-data-api-service/api/deviceDataApi/patientInfoPage"
+    url = "https://cgmdc-api.si-datacenter.com" + url_suffix
+
+    head = {'akid': '1d8d659dcad140aba7d329158f1cb756',
+            'mid': aes_encrypt(str(uuid.uuid1())),
+            'ts': aes_encrypt(time.strftime("%Y%m%d%H%M%S"))}
+
+    body = {
+        "patientId": user_id,
+        "macAddress": "",
+        "dataSourceSysFlag": 1
+    }
+
+    res = json.loads(requests.post(url=url, headers=head, json=body).text)
+
+    return res
+
+
 # 导出病人列表数据
 def getPatientList(pageIndex, pageSize):
     res_data = getPatientListFromInterface(pageIndex, pageSize)
@@ -164,10 +199,25 @@ def getBasal(user_id):
     return basal
 
 
+# 导出CGM佩戴周期数据
+def getCGMPeriodList(user_id):
+    res_data = getCGMPeriodFromInterface(user_id)
+    cgm_columns = ['macAddress', 'startTime', 'endTime']
+    cgm_list = pd.DataFrame(columns=cgm_columns)
+    for index, item in enumerate(res_data['data']):
+        cgm_list.loc[index] = itemgetter(*cgm_columns)(item)
+
+    # cgm_list['startTime'] = pd.to_datetime(cgm_list['startTime'])
+    # cgm_list['endTime'] = pd.to_datetime(cgm_list['endTime'])
+
+    return cgm_list
+
+
 # 病人类
 class Patient:
-    def __init__(self, patientID):
+    def __init__(self, patientID, CGMNUM, food_name):
         self.ID = patientID
+        self.CGMNUM = CGMNUM
         self.CGM = pd.DataFrame()
         self.Carb = pd.DataFrame()
         self.Insulin = pd.DataFrame()
@@ -180,41 +230,50 @@ class Patient:
         self.Meal = [5, 10, 10, 15, 17, 23]
         self.MaxCarb = 300
         self.MaxInsulin = 20
-        self.CGMPeriod = ['0', '0']
+        self.CGMPeriod = pd.DataFrame()
+        self.food_name = food_name
         # 初始化
         self.getCGMPeriod()
-        cgm_file = Path(f'data/InitializationData/CGM_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
 
-        if cgm_file.is_file():
-            self.readInitializationData()
-        else:
-            self.getPeriodPatientData()
-            self.saveInitializationData()
+        for idx in range(self.CGMNUM):
+            star_time = self.CGMPeriod.iloc[idx, 0].split(" ")[0]
+            end_time = self.CGMPeriod.iloc[idx, 1].split(" ")[0]
+            cgm_file = Path(f'data/InitializationData/CGM_{self.ID}_{star_time}_{end_time}.csv')
+
+            if cgm_file.is_file():
+                self.readInitializationData(star_time, end_time)
+            else:
+                self.getPeriodPatientData(star_time, end_time)
+                self.saveInitializationData(star_time, end_time)
+
+            self.getMvpMealModelData()
+            self.transMvpMealModelData()
 
 
-    def saveInitializationData(self):
+    def saveInitializationData(self, star_time, end_time):
         self.CGM.to_csv(
-            f'data/InitializationData/CGM_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
+            f'data/InitializationData/CGM_{self.ID}_{star_time}_{end_time}.csv')
         self.Carb.to_csv(
-            f'data/InitializationData/Carb_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
+            f'data/InitializationData/Carb_{self.ID}_{star_time}_{end_time}.csv')
         self.Insulin.to_csv(
-            f'data/InitializationData/Insulin_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
+            f'data/InitializationData/Insulin_{self.ID}_{star_time}_{end_time}.csv')
 
-    def readInitializationData(self):
-        self.CGM = pd.read_csv(f'data/InitializationData/CGM_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
-        self.Carb = pd.read_csv(f'data/InitializationData/Carb_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
+    def readInitializationData(self, star_time, end_time):
+        self.CGM = pd.read_csv(f'data/InitializationData/CGM_{self.ID}_{star_time}_{end_time}.csv')
+        self.Carb = pd.read_csv(f'data/InitializationData/Carb_{self.ID}_{star_time}_{end_time}.csv')
         self.Insulin = pd.read_csv(
-            f'data/InitializationData/Insulin_{self.ID}_{self.CGMPeriod[0]}_{self.CGMPeriod[1]}.csv')
+            f'data/InitializationData/Insulin_{self.ID}_{star_time}_{end_time}.csv')
 
         self.CGM['glucoseTime'] = pd.to_datetime(self.CGM['glucoseTime'])
         self.Carb['actionTime'] = pd.to_datetime(self.Carb['actionTime'])
         self.Insulin['actionTime'] = pd.to_datetime(self.Insulin['actionTime'])
 
     def getCGMPeriod(self):
-        self.CGMPeriod = ['2022-07-11', '2022-08-11']
+        CGMList = getCGMPeriodList(self.ID)
+        self.CGMPeriod = CGMList.iloc[-(self.CGMNUM + 1):, 1:3]
 
-    def getPeriodPatientData(self):
-        self.CGM, self.Carb, self.Insulin = getPeriodData(self.ID, self.CGMPeriod[0], self.CGMPeriod[1])
+    def getPeriodPatientData(self, star_time, end_time):
+        self.CGM, self.Carb, self.Insulin = getPeriodData(self.ID, star_time, end_time)
 
     def getCarbProblem(self):
         carb = self.Carb.copy()
@@ -411,7 +470,7 @@ class Patient:
         carb_table['time_stamp'] = carb['Time_stamp'].copy()
         carb_table['name'] = carb['foodName'].copy()
         carb_table['carb'] = carb['carbonWaterWeight'].copy()
-        carb_table['digestType'] = carb['digestType'].copy()
+        carb_table['diningType'] = carb['diningType'].copy()
         carb_table = carb_table.T.drop_duplicates().T
 
         # 提取胰岛素信息表
@@ -420,7 +479,7 @@ class Patient:
         insulin['day'] = insulin['actionTime'].apply(lambda x: x.month * 100 + x.day)
 
         # 查询用药类型与时间不匹配记录
-        insulin.iloc[insulin.query(f"drugTime==1 and {self.Meal[1]}").index, -1] = 1
+        insulin.iloc[insulin.query(f"drugTime==1 and hour > {self.Meal[1]}").index, -1] = 1
         insulin.iloc[insulin.query(f"drugTime==2 and hour > {self.Meal[3]} and hour < {self.Meal[2]} ").index, -1] = 1
         insulin.iloc[insulin.query(f"drugTime==3 and hour < {self.Meal[4]}").index, -1] = 1
 
@@ -429,7 +488,7 @@ class Patient:
         insulin.iloc[insulin.query(f"dose > {self.MaxInsulin}").index, -1] = 2
         insulin.iloc[insulin.query("infusionMode != 1 and (squareWaveDose == 0 or squareWaveTime == 0)").index, -1] = 2
 
-        insulin = insulin.query('problemID == 1 or problemID == 2')[
+        insulin = insulin.query('problemID == 0')[
             ['Time_stamp', 'actionTime', 'drugTime', 'actionType', 'dose', 'infusionMode', 'conventionalWaveDose',
              'squareWaveDose', 'squareWaveTime']].copy()
 
@@ -464,17 +523,18 @@ class Patient:
         data_table['day'] = data_table['time'].apply(lambda x: x.month * 100 + x.day)
 
         self.MvpMealModelData = data_table[
-            ['time', 'time_stamp', 'bg', 'name', 'carb', 'dose', 'squareWaveDose', 'squareWaveTime']].copy()
+            ['time', 'time_stamp', 'bg', 'name', 'carb', 'dose', 'infusionMode', 'squareWaveDose',
+             'squareWaveTime']].copy()
 
     def getOLSData(self):
         OW = 24 * 60
         step = 30
-        star_tix, end_tix, index_num = 0,0,0
-        cgm_mean, carb_sum, insulin_sum=[],[],[]
+        star_tix, end_tix, index_num = 0, 0, 0
+        cgm_mean, carb_sum, insulin_sum = [], [], []
 
         while end_tix < self.MvpAverageModelData.shape[0]:
             star_tix = step * index_num
-            end_tix = step * (index_num+1) + OW
+            end_tix = step * (index_num + 1) + OW
             cgm_mean.append(self.MvpAverageModelData['bg'][star_tix:end_tix].mean())
             carb_sum.append(self.MvpAverageModelData['carb'][star_tix:end_tix].sum())
             insulin_sum.append(self.MvpAverageModelData['dose'][star_tix:end_tix].sum())
@@ -487,7 +547,7 @@ class Patient:
 
     def OLS(self):
         # 相关性
-        X = self.OLSData[['carb','insulin']]
+        X = self.OLSData[['carb', 'insulin']]
         X = sm.add_constant(X)
         Y = self.OLSData['cgm']
         model = sm.OLS(Y, X).fit()
@@ -509,14 +569,73 @@ class Patient:
         fig2.show()
 
     def transMvpMealModelData(self):
-        pass
+        transMvpMealData = pd.DataFrame()
+        transMvpMealData = self.MvpMealModelData.copy()
+
+        # 基础率
+        basal = getBasal(self.ID)
+        transMvpMealData['day'] = transMvpMealData['time'].apply(lambda x: x.month * 100 + x.day)
+        transMvpMealData['hour'] = transMvpMealData['time'].apply(lambda x: x.hour)
+        transMvpMealData['basal'] = transMvpMealData['hour'].apply(lambda x: basal[x - 1] / 60)
+
+        # bg滤波
+        transMvpMealData['filted_bg'] = filter(transMvpMealData['bg'])
+
+        # 方波转化
+        transMvpMealData['step_dose'] = 0
+        transMvpMealData.reset_index(drop=True, inplace=True)
+
+        # 查找方波
+        squareWaveTime = transMvpMealData.query('infusionMode==3')['squareWaveTime'].values
+        squareWaveDose = transMvpMealData.query('infusionMode==3')['squareWaveDose'].values
+        squareWaveinex = transMvpMealData.query('infusionMode==3')['squareWaveDose'].index
+
+        tem_step_dose = transMvpMealData['step_dose'].copy()
+
+        if any(squareWaveTime):
+            for id, idx in enumerate(squareWaveinex):
+                tem_step_dose[idx:idx + int(squareWaveTime[id])] = transMvpMealData['step_dose'][
+                                                                   idx:idx + int(squareWaveTime[id])].apply(
+                    lambda x: x + squareWaveDose[id] / squareWaveTime[id])
+        transMvpMealData['step_dose'] = tem_step_dose
+
+        transMvpMealData['dose'] = transMvpMealData['dose'] - transMvpMealData['squareWaveDose']
+        transMvpMealData['dose'] = transMvpMealData['dose'] + transMvpMealData['step_dose']
+
+        # transMvpMealData[['time', 'time_stamp', 'bg', 'filted_bg', 'carb', 'dose', 'basal']].to_csv(
+        #     f'model/mvpdata/{user_id}_{it}.csv', index=None)
+
+        transMvpMealData['dose'] = transMvpMealData['dose'] + transMvpMealData['basal']
+
+        transMvpMealData.reset_index(drop=True, inplace=True)
+
+        # 食物筛选
+        transMvpMealData['food_name'] = transMvpMealData['name'].str.find(self.food_name)
+        food_index = transMvpMealData.query('food_name==0').index
+        keep_len = 2
+
+        food_data = pd.DataFrame()
+        for jj in range(len(food_index)):
+            start_ = 0 if food_index[jj] - keep_len * 60 < 0 else food_index[jj] - keep_len * 60
+            end_ = transMvpMealData.shape[0] if food_index[jj] + keep_len * 60 > transMvpMealData.shape[0] else \
+            food_index[
+                jj] + keep_len * 60
+            food_data = transMvpMealData.loc[start_:end_].copy()
+
+            food_data['time_stamp'] = (food_data['time_stamp'] - food_data.iloc[0]['time_stamp']) / 1e9 / 60
+
+            food_data[['time_stamp', 'bg', 'filted_bg', 'carb', 'dose', 'name']].to_csv(
+                f'data/mvpdata/Meal_0_{self.ID}_{transMvpMealData["day"][start_ + 1]}_{jj:0>2d}.csv', index=None, header=None)
 
 
-
-
-
-P = Patient(29)
-P.getMvpAverageModelData()
-P.getOLSData()
-P.OLS()
+P = Patient(29, 2, "米饭")
+# P.getMvpAverageModelData()
+# P.getMvpMealModelData()
+# P.transMvpMealModelData("米饭")
+# P.getOLSData()
+# P.OLS()
 # print(P.OLSData)
+# CGMList = getCGMPeriodList(29)
+# a = CGMList.iloc[-2:, 1:3]
+# print(a.iloc[0, 1].split(" ")[0])
+# print(getCGMPeriodFromInterface("29"))
